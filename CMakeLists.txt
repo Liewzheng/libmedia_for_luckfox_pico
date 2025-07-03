@@ -18,25 +18,21 @@ set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -DNDEBUG")
 # 交叉编译工具链配置
 # ============================================================================
 
-# 添加选项来控制是否启用交叉编译
-option(ENABLE_CROSS_COMPILE "Enable cross-compilation for Luckfox Pico" OFF)
-
-# 检测是否需要交叉编译（针对 Luckfox Pico ARM 设备）
-if(ENABLE_CROSS_COMPILE AND EXISTS "/home/liewzheng/Workspace/luckfox-pico/tools/linux/toolchain/arm-rockchip830-linux-uclibcgnueabihf/bin/arm-rockchip830-linux-uclibcgnueabihf-gcc")
-    message(STATUS "Configuring for Luckfox Pico cross-compilation")
+# 检查是否从外部传入了 TOOLCHAIN_PREFIX
+if(DEFINED TOOLCHAIN_PREFIX AND EXISTS "${TOOLCHAIN_PREFIX}/bin/arm-rockchip830-linux-uclibcgnueabihf-gcc")
+    message(STATUS "Using external toolchain: ${TOOLCHAIN_PREFIX}")
     
-    # 设置交叉编译工具链路径
-    set(TOOLCHAIN_PREFIX "/home/liewzheng/Workspace/luckfox-pico/tools/linux/toolchain/arm-rockchip830-linux-uclibcgnueabihf")
+    # 设置系统根目录（如果需要）
+    if(EXISTS "${TOOLCHAIN_PREFIX}")
     set(CMAKE_C_COMPILER "${TOOLCHAIN_PREFIX}/bin/arm-rockchip830-linux-uclibcgnueabihf-gcc")
     set(CMAKE_CXX_COMPILER "${TOOLCHAIN_PREFIX}/bin/arm-rockchip830-linux-uclibcgnueabihf-g++")
     set(CMAKE_AR "${TOOLCHAIN_PREFIX}/bin/arm-rockchip830-linux-uclibcgnueabihf-ar")
     set(CMAKE_STRIP "${TOOLCHAIN_PREFIX}/bin/arm-rockchip830-linux-uclibcgnueabihf-strip")
-    
-    # 设置系统根目录
-    set(CMAKE_FIND_ROOT_PATH "${TOOLCHAIN_PREFIX}")
-    set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
-    set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
-    set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+        set(CMAKE_FIND_ROOT_PATH "${TOOLCHAIN_PREFIX}")
+        set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+        set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+        set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+    endif()
     
     # ARM 架构特定标志
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=armv7-a -mfpu=neon-vfpv4 -mfloat-abi=hard")
@@ -45,8 +41,10 @@ if(ENABLE_CROSS_COMPILE AND EXISTS "/home/liewzheng/Workspace/luckfox-pico/tools
     set(CMAKE_CROSSCOMPILING TRUE)
     set(CMAKE_SYSTEM_NAME Linux)
     set(CMAKE_SYSTEM_PROCESSOR arm)
+    
+    message(STATUS "Configuring for cross-compilation with toolchain: ${TOOLCHAIN_PREFIX}")
 else()
-    message(STATUS "Configuring for native compilation")
+    message(STATUS "Using native compilation (no external toolchain specified)")
     set(CMAKE_CROSSCOMPILING FALSE)
 endif()
 
@@ -82,8 +80,22 @@ set_target_properties(media PROPERTIES
     SOVERSION ${PROJECT_VERSION_MAJOR}
     OUTPUT_NAME "media"
     PUBLIC_HEADER "${LIBMEDIA_HEADERS}"
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
 )
+
+# 如果父项目设置了统一的输出目录，使用父项目的设置
+if(CMAKE_LIBRARY_OUTPUT_DIRECTORY_FOR_SUBMODULES)
+    set_target_properties(media PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY_FOR_SUBMODULES}"
+    )
+elseif(CMAKE_LIBRARY_OUTPUT_DIRECTORY)
+    set_target_properties(media PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}"
+    )
+else()
+    set_target_properties(media PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+    )
+endif()
 
 # ============================================================================
 # 编译定义和链接库
