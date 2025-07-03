@@ -82,6 +82,7 @@ set_target_properties(media PROPERTIES
     SOVERSION ${PROJECT_VERSION_MAJOR}
     OUTPUT_NAME "media"
     PUBLIC_HEADER "${LIBMEDIA_HEADERS}"
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
 )
 
 # ============================================================================
