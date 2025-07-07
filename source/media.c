@@ -90,6 +90,17 @@ static int g_initialized = 0;
 static media_error_t g_last_error = MEDIA_ERROR_NONE;
 static int g_debug_level = DEBUG_ERROR;
 
+// Sub-device management
+#define MAX_SUBDEVICES 8
+
+typedef struct {
+    int fd;                         /**< File descriptor */
+    char device_path[DEVICE_NAME_SIZE]; /**< Sub-device path */
+} subdev_context_t;
+
+static subdev_context_t g_subdevices[MAX_SUBDEVICES];
+static int g_subdev_count = 0;
+
 // ============================================================================
 // Internal Utility Functions
 // ============================================================================
@@ -163,6 +174,25 @@ static device_context_t* find_device(int handle)
     }
     
     return dev;
+}
+
+/**
+ * @brief Find sub-device context by handle
+ */
+static subdev_context_t* find_subdev(int handle)
+{
+    if (handle < 0 || handle >= g_subdev_count) {
+        set_last_error(MEDIA_ERROR_INVALID_PARAM);
+        return NULL;
+    }
+    
+    subdev_context_t* subdev = &g_subdevices[handle];
+    if (subdev->fd < 0) {
+        set_last_error(MEDIA_ERROR_DEVICE_NOT_FOUND);
+        return NULL;
+    }
+    
+    return subdev;
 }
 
 /**
@@ -1136,6 +1166,241 @@ void libmedia_destroy_session(media_session_t* session)
     
     free(session);
     MEDIA_DEBUG(DEBUG_INFO, "Session destroyed");
+}
+
+// ============================================================================
+// Camera Control Interface Implementation
+// ============================================================================
+
+int libmedia_open_subdev(const char* subdev_path)
+{
+    if (!g_initialized) {
+        libmedia_init();
+    }
+    
+    if (!subdev_path) {
+        set_last_error(MEDIA_ERROR_INVALID_PARAM);
+        return -1;
+    }
+    
+    if (g_subdev_count >= MAX_SUBDEVICES) {
+        set_last_error(MEDIA_ERROR_OUT_OF_MEMORY);
+        return -1;
+    }
+    
+    // Open sub-device
+    int fd = open(subdev_path, O_RDWR);
+    if (fd == -1) {
+        MEDIA_DEBUG(DEBUG_ERROR, "Failed to open sub-device %s: %s", subdev_path, strerror(errno));
+        set_last_error(MEDIA_ERROR_DEVICE_NOT_FOUND);
+        return -1;
+    }
+    
+    // Initialize sub-device context
+    subdev_context_t* subdev = &g_subdevices[g_subdev_count];
+    subdev->fd = fd;
+    strncpy(subdev->device_path, subdev_path, DEVICE_NAME_SIZE - 1);
+    subdev->device_path[DEVICE_NAME_SIZE - 1] = '\0';
+    
+    MEDIA_DEBUG(DEBUG_INFO, "Opened sub-device %s with handle %d", subdev_path, g_subdev_count);
+    return g_subdev_count++;
+}
+
+int libmedia_close_subdev(int subdev_handle)
+{
+    subdev_context_t* subdev = find_subdev(subdev_handle);
+    if (!subdev) {
+        return -1;
+    }
+    
+    if (subdev->fd >= 0) {
+        close(subdev->fd);
+        subdev->fd = -1;
+    }
+    
+    MEDIA_DEBUG(DEBUG_INFO, "Closed sub-device %s", subdev->device_path);
+    return 0;
+}
+
+int libmedia_get_control(int subdev_handle, uint32_t control_id, int32_t* value)
+{
+    subdev_context_t* subdev = find_subdev(subdev_handle);
+    if (!subdev || !value) {
+        set_last_error(MEDIA_ERROR_INVALID_PARAM);
+        return -1;
+    }
+    
+    struct v4l2_control ctrl = {0};
+    ctrl.id = control_id;
+    
+    if (xioctl(subdev->fd, VIDIOC_G_CTRL, &ctrl) == -1) {
+        MEDIA_DEBUG(DEBUG_ERROR, "VIDIOC_G_CTRL failed for control 0x%08x: %s", control_id, strerror(errno));
+        set_last_error(MEDIA_ERROR_IOCTL_FAILED);
+        return -1;
+    }
+    
+    *value = ctrl.value;
+    MEDIA_DEBUG(DEBUG_DEBUG, "Get control 0x%08x = %d", control_id, ctrl.value);
+    return 0;
+}
+
+int libmedia_set_control(int subdev_handle, uint32_t control_id, int32_t value)
+{
+    subdev_context_t* subdev = find_subdev(subdev_handle);
+    if (!subdev) {
+        set_last_error(MEDIA_ERROR_INVALID_PARAM);
+        return -1;
+    }
+    
+    struct v4l2_control ctrl = {0};
+    ctrl.id = control_id;
+    ctrl.value = value;
+    
+    if (xioctl(subdev->fd, VIDIOC_S_CTRL, &ctrl) == -1) {
+        MEDIA_DEBUG(DEBUG_ERROR, "VIDIOC_S_CTRL failed for control 0x%08x = %d: %s", control_id, value, strerror(errno));
+        set_last_error(MEDIA_ERROR_IOCTL_FAILED);
+        return -1;
+    }
+    
+    MEDIA_DEBUG(DEBUG_DEBUG, "Set control 0x%08x = %d", control_id, value);
+    return 0;
+}
+
+int libmedia_get_control_info(int subdev_handle, uint32_t control_id, media_control_info_t* info)
+{
+    subdev_context_t* subdev = find_subdev(subdev_handle);
+    if (!subdev || !info) {
+        set_last_error(MEDIA_ERROR_INVALID_PARAM);
+        return -1;
+    }
+    
+    struct v4l2_queryctrl queryctrl = {0};
+    queryctrl.id = control_id;
+    
+    if (xioctl(subdev->fd, VIDIOC_QUERYCTRL, &queryctrl) == -1) {
+        MEDIA_DEBUG(DEBUG_ERROR, "VIDIOC_QUERYCTRL failed for control 0x%08x: %s", control_id, strerror(errno));
+        set_last_error(MEDIA_ERROR_IOCTL_FAILED);
+        return -1;
+    }
+    
+    info->id = queryctrl.id;
+    strncpy(info->name, (char*)queryctrl.name, sizeof(info->name) - 1);
+    info->name[sizeof(info->name) - 1] = '\0';
+    info->min = queryctrl.minimum;
+    info->max = queryctrl.maximum;
+    info->step = queryctrl.step;
+    info->default_value = queryctrl.default_value;
+    info->flags = queryctrl.flags;
+    info->type = queryctrl.type;
+    
+    // Get current value
+    int32_t current_value;
+    if (libmedia_get_control(subdev_handle, control_id, &current_value) == 0) {
+        info->current_value = current_value;
+    } else {
+        info->current_value = info->default_value;
+    }
+    
+    return 0;
+}
+
+int libmedia_list_controls(int subdev_handle, media_control_info_t* controls, int max_controls)
+{
+    subdev_context_t* subdev = find_subdev(subdev_handle);
+    if (!subdev || !controls || max_controls <= 0) {
+        set_last_error(MEDIA_ERROR_INVALID_PARAM);
+        return -1;
+    }
+    
+    int count = 0;
+    uint32_t id = V4L2_CTRL_FLAG_NEXT_CTRL;
+    
+    while (count < max_controls) {
+        struct v4l2_queryctrl queryctrl = {0};
+        queryctrl.id = id;
+        
+        if (xioctl(subdev->fd, VIDIOC_QUERYCTRL, &queryctrl) == -1) {
+            if (errno == EINVAL) {
+                break; // No more controls
+            }
+            MEDIA_DEBUG(DEBUG_ERROR, "VIDIOC_QUERYCTRL failed: %s", strerror(errno));
+            break;
+        }
+        
+        if (queryctrl.flags & V4L2_CTRL_FLAG_DISABLED) {
+            id = queryctrl.id | V4L2_CTRL_FLAG_NEXT_CTRL;
+            continue;
+        }
+        
+        media_control_info_t* info = &controls[count];
+        info->id = queryctrl.id;
+        strncpy(info->name, (char*)queryctrl.name, sizeof(info->name) - 1);
+        info->name[sizeof(info->name) - 1] = '\0';
+        info->min = queryctrl.minimum;
+        info->max = queryctrl.maximum;
+        info->step = queryctrl.step;
+        info->default_value = queryctrl.default_value;
+        info->flags = queryctrl.flags;
+        info->type = queryctrl.type;
+        
+        // Get current value
+        int32_t current_value;
+        if (libmedia_get_control(subdev_handle, queryctrl.id, &current_value) == 0) {
+            info->current_value = current_value;
+        } else {
+            info->current_value = info->default_value;
+        }
+        
+        count++;
+        id = queryctrl.id | V4L2_CTRL_FLAG_NEXT_CTRL;
+    }
+    
+    MEDIA_DEBUG(DEBUG_INFO, "Found %d controls", count);
+    return count;
+}
+
+// ============================================================================
+// Convenience Functions for Common Controls
+// ============================================================================
+
+int libmedia_set_exposure(int subdev_handle, int32_t exposure)
+{
+    return libmedia_set_control(subdev_handle, MEDIA_CTRL_EXPOSURE, exposure);
+}
+
+int libmedia_get_exposure(int subdev_handle, int32_t* exposure)
+{
+    return libmedia_get_control(subdev_handle, MEDIA_CTRL_EXPOSURE, exposure);
+}
+
+int libmedia_set_gain(int subdev_handle, int32_t gain)
+{
+    return libmedia_set_control(subdev_handle, MEDIA_CTRL_ANALOGUE_GAIN, gain);
+}
+
+int libmedia_get_gain(int subdev_handle, int32_t* gain)
+{
+    return libmedia_get_control(subdev_handle, MEDIA_CTRL_ANALOGUE_GAIN, gain);
+}
+
+int libmedia_set_horizontal_flip(int subdev_handle, int enable)
+{
+    return libmedia_set_control(subdev_handle, MEDIA_CTRL_HORIZONTAL_FLIP, enable ? 1 : 0);
+}
+
+int libmedia_set_vertical_flip(int subdev_handle, int enable)
+{
+    return libmedia_set_control(subdev_handle, MEDIA_CTRL_VERTICAL_FLIP, enable ? 1 : 0);
+}
+
+int libmedia_set_vertical_blanking(int subdev_handle, int32_t blanking)
+{
+    return libmedia_set_control(subdev_handle, MEDIA_CTRL_VERTICAL_BLANKING, blanking);
+}
+
+int libmedia_set_test_pattern(int subdev_handle, int32_t pattern)
+{
+    return libmedia_set_control(subdev_handle, MEDIA_CTRL_TEST_PATTERN, pattern);
 }
 
 // ============================================================================

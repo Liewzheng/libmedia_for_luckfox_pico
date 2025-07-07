@@ -496,6 +496,160 @@ int libmedia_start_streaming_mp(int handle);
  */
 int libmedia_stop_streaming_mp(int handle);
 
+// ============================================================================
+// Camera Control Interface
+// ============================================================================
+
+/**
+ * @enum media_control_id
+ * @brief Camera control identifiers
+ */
+typedef enum {
+    MEDIA_CTRL_EXPOSURE = 0x00980911,           /**< Exposure time */
+    MEDIA_CTRL_HORIZONTAL_FLIP = 0x00980914,    /**< Horizontal flip */
+    MEDIA_CTRL_VERTICAL_FLIP = 0x00980915,      /**< Vertical flip */
+    MEDIA_CTRL_VERTICAL_BLANKING = 0x009e0901,  /**< Vertical blanking */
+    MEDIA_CTRL_HORIZONTAL_BLANKING = 0x009e0902, /**< Horizontal blanking */
+    MEDIA_CTRL_ANALOGUE_GAIN = 0x009e0903,      /**< Analogue gain */
+    MEDIA_CTRL_LINK_FREQUENCY = 0x009f0901,     /**< Link frequency */
+    MEDIA_CTRL_PIXEL_RATE = 0x009f0902,         /**< Pixel rate */
+    MEDIA_CTRL_TEST_PATTERN = 0x009f0903        /**< Test pattern */
+} media_control_id_t;
+
+/**
+ * @struct media_control_info
+ * @brief Control information structure
+ */
+typedef struct {
+    uint32_t id;            /**< Control ID */
+    char name[32];          /**< Control name */
+    int32_t min;            /**< Minimum value */
+    int32_t max;            /**< Maximum value */
+    int32_t step;           /**< Step size */
+    int32_t default_value;  /**< Default value */
+    int32_t current_value;  /**< Current value */
+    uint32_t flags;         /**< Control flags */
+    uint32_t type;          /**< Control type */
+} media_control_info_t;
+
+/**
+ * @brief Open sub-device for control operations
+ * @param subdev_path Path to the sub-device (e.g., "/dev/v4l-subdev2")
+ * @return Sub-device handle on success, negative on error
+ */
+int libmedia_open_subdev(const char* subdev_path);
+
+/**
+ * @brief Close sub-device
+ * @param subdev_handle Sub-device handle
+ * @return 0 on success, negative on error
+ */
+int libmedia_close_subdev(int subdev_handle);
+
+/**
+ * @brief Get control value
+ * @param subdev_handle Sub-device handle
+ * @param control_id Control ID
+ * @param value Output control value
+ * @return 0 on success, negative on error
+ */
+int libmedia_get_control(int subdev_handle, uint32_t control_id, int32_t* value);
+
+/**
+ * @brief Set control value
+ * @param subdev_handle Sub-device handle
+ * @param control_id Control ID
+ * @param value Control value to set
+ * @return 0 on success, negative on error
+ */
+int libmedia_set_control(int subdev_handle, uint32_t control_id, int32_t value);
+
+/**
+ * @brief Get control information (min, max, step, etc.)
+ * @param subdev_handle Sub-device handle
+ * @param control_id Control ID
+ * @param info Output control information
+ * @return 0 on success, negative on error
+ */
+int libmedia_get_control_info(int subdev_handle, uint32_t control_id, media_control_info_t* info);
+
+/**
+ * @brief List all available controls
+ * @param subdev_handle Sub-device handle
+ * @param controls Output control array (must be pre-allocated)
+ * @param max_controls Maximum number of controls to return
+ * @return Number of controls found on success, negative on error
+ */
+int libmedia_list_controls(int subdev_handle, media_control_info_t* controls, int max_controls);
+
+// ============================================================================
+// Convenience Functions for Common Controls
+// ============================================================================
+
+/**
+ * @brief Set exposure value
+ * @param subdev_handle Sub-device handle
+ * @param exposure Exposure value (1-1352)
+ * @return 0 on success, negative on error
+ */
+int libmedia_set_exposure(int subdev_handle, int32_t exposure);
+
+/**
+ * @brief Get exposure value
+ * @param subdev_handle Sub-device handle
+ * @param exposure Output exposure value
+ * @return 0 on success, negative on error
+ */
+int libmedia_get_exposure(int subdev_handle, int32_t* exposure);
+
+/**
+ * @brief Set analogue gain value
+ * @param subdev_handle Sub-device handle
+ * @param gain Gain value (128-99614)
+ * @return 0 on success, negative on error
+ */
+int libmedia_set_gain(int subdev_handle, int32_t gain);
+
+/**
+ * @brief Get analogue gain value
+ * @param subdev_handle Sub-device handle
+ * @param gain Output gain value
+ * @return 0 on success, negative on error
+ */
+int libmedia_get_gain(int subdev_handle, int32_t* gain);
+
+/**
+ * @brief Set horizontal flip
+ * @param subdev_handle Sub-device handle
+ * @param enable 1 to enable, 0 to disable
+ * @return 0 on success, negative on error
+ */
+int libmedia_set_horizontal_flip(int subdev_handle, int enable);
+
+/**
+ * @brief Set vertical flip
+ * @param subdev_handle Sub-device handle
+ * @param enable 1 to enable, 0 to disable
+ * @return 0 on success, negative on error
+ */
+int libmedia_set_vertical_flip(int subdev_handle, int enable);
+
+/**
+ * @brief Set vertical blanking
+ * @param subdev_handle Sub-device handle
+ * @param blanking Vertical blanking value (64-31471)
+ * @return 0 on success, negative on error
+ */
+int libmedia_set_vertical_blanking(int subdev_handle, int32_t blanking);
+
+/**
+ * @brief Set test pattern
+ * @param subdev_handle Sub-device handle
+ * @param pattern Test pattern mode (0=disabled, 1-4=various patterns)
+ * @return 0 on success, negative on error
+ */
+int libmedia_set_test_pattern(int subdev_handle, int32_t pattern);
+
 #ifdef __cplusplus
 }
 #endif
