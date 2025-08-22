@@ -23,6 +23,7 @@
 #include <sys/select.h>
 #include <sys/time.h>
 #include <time.h>
+#include <stdbool.h>
 #include <linux/videodev2.h>
 
 // ============================================================================
@@ -68,6 +69,7 @@ typedef struct {
     int buffer_count;               /**< Number of buffers */
     int streaming;                  /**< Streaming state */
     int use_multiplanar;            /**< Multi-planar mode */
+    bool* buffer_queued;            /**< Track which buffers are currently queued */
 } device_context_t;
 
 /**
@@ -290,6 +292,7 @@ int libmedia_open_device(const char* device_path)
     dev->device_path[DEVICE_NAME_SIZE - 1] = '\0';
     dev->buffer_count = 0;
     dev->buffers = NULL;
+    dev->buffer_queued = NULL;
     dev->streaming = 0;
     dev->use_multiplanar = 0;
     
@@ -614,11 +617,20 @@ int libmedia_request_buffers_mp(int handle, int count, media_buffer_t* buffers)
                 return -1;
             }
             buffers[i].length[p] = buf.m.planes[p].length;
+            MEDIA_DEBUG(DEBUG_INFO, "Mapped buffer %d plane %d: length=%u, offset=%u", 
+                       i, p, buffers[i].length[p], buf.m.planes[p].m.mem_offset);
         }
     }
     
     dev->buffers = buffers;
     dev->buffer_count = reqbuf.count;
+    
+    // 分配缓冲区状态跟踪数组
+    dev->buffer_queued = calloc(reqbuf.count, sizeof(bool));
+    if (!dev->buffer_queued) {
+        MEDIA_DEBUG(DEBUG_ERROR, "Failed to allocate buffer tracking array");
+        // 继续运行，但没有状态跟踪
+    }
     
     MEDIA_DEBUG(DEBUG_INFO, "Allocated %d MP buffers", reqbuf.count);
     return reqbuf.count;
@@ -640,6 +652,12 @@ int libmedia_free_buffers(int handle, media_buffer_t* buffers, int count)
                 buffers[i].start[p] = NULL;
             }
         }
+    }
+    
+    // Free buffer tracking array
+    if (dev->buffer_queued) {
+        free(dev->buffer_queued);
+        dev->buffer_queued = NULL;
     }
     
     dev->buffers = NULL;
@@ -679,6 +697,29 @@ int libmedia_queue_buffer_mp(int handle, int index)
         return -1;
     }
     
+    // 检查缓冲区是否已经在队列中
+    if (dev->buffer_queued && dev->buffer_queued[index]) {
+        MEDIA_DEBUG(DEBUG_WARNING, "Buffer %d is already queued, skipping", index);
+        return 0;  // 已经在队列中，返回成功
+    }
+    
+    // 首先查询缓冲区信息以获取正确的平面配置
+    struct v4l2_buffer querybuf = {0};
+    struct v4l2_plane query_planes[VIDEO_MAX_PLANES] = {0};
+    
+    querybuf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+    querybuf.memory = V4L2_MEMORY_MMAP;
+    querybuf.index = index;
+    querybuf.m.planes = query_planes;
+    querybuf.length = VIDEO_MAX_PLANES;
+    
+    if (xioctl(dev->fd, VIDIOC_QUERYBUF, &querybuf) == -1) {
+        MEDIA_DEBUG(DEBUG_ERROR, "VIDIOC_QUERYBUF failed for buffer %d: %s", index, strerror(errno));
+        set_last_error(MEDIA_ERROR_BUFFER_ERROR);
+        return -1;
+    }
+    
+    // 现在使用查询到的信息来队列缓冲区
     struct v4l2_buffer buf = {0};
     struct v4l2_plane planes[VIDEO_MAX_PLANES] = {0};
     
@@ -686,12 +727,47 @@ int libmedia_queue_buffer_mp(int handle, int index)
     buf.memory = V4L2_MEMORY_MMAP;
     buf.index = index;
     buf.m.planes = planes;
-    buf.length = VIDEO_MAX_PLANES;
+    buf.length = querybuf.length;  // 使用查询到的平面数量
+    
+    // 设置每个平面的信息
+    for (uint32_t p = 0; p < querybuf.length; p++) {
+        planes[p].length = query_planes[p].length;
+        planes[p].m.mem_offset = query_planes[p].m.mem_offset;
+        planes[p].bytesused = 0;  // 队列时设置为0，驱动会填充实际使用的字节数
+        
+        MEDIA_DEBUG(DEBUG_INFO, "Buffer %d plane %d: length=%u, offset=%u", 
+                   index, p, planes[p].length, planes[p].m.mem_offset);
+    }
+    
+    MEDIA_DEBUG(DEBUG_INFO, "Queueing buffer %d with %u planes", index, buf.length);
     
     if (xioctl(dev->fd, VIDIOC_QBUF, &buf) == -1) {
-        MEDIA_DEBUG(DEBUG_ERROR, "VIDIOC_QBUF (MP) failed for buffer %d: %s", index, strerror(errno));
+        MEDIA_DEBUG(DEBUG_ERROR, "VIDIOC_QBUF (MP) failed for buffer %d: %s (errno=%d)", 
+                   index, strerror(errno), errno);
+        MEDIA_DEBUG(DEBUG_ERROR, "Failed buffer details: type=%d, memory=%d, index=%d, length=%u", 
+                   buf.type, buf.memory, buf.index, buf.length);
+        for (uint32_t p = 0; p < buf.length; p++) {
+            MEDIA_DEBUG(DEBUG_ERROR, "  Plane %d: length=%u, bytesused=%u, offset=%u", 
+                       p, planes[p].length, planes[p].bytesused, planes[p].m.mem_offset);
+        }
+        
+        // 如果是EINVAL (Invalid argument)，这通常意味着缓冲区已经在队列中
+        if (errno == EINVAL) {
+            MEDIA_DEBUG(DEBUG_WARNING, "Buffer %d seems to be already queued, ignoring error", index);
+            // 标记缓冲区为已队列状态
+            if (dev->buffer_queued) {
+                dev->buffer_queued[index] = true;
+            }
+            return 0;  // 假设成功，因为缓冲区已经在队列中
+        }
+        
         set_last_error(MEDIA_ERROR_BUFFER_ERROR);
         return -1;
+    }
+    
+    // 标记缓冲区为已队列状态
+    if (dev->buffer_queued) {
+        dev->buffer_queued[index] = true;
     }
     
     return 0;
@@ -747,7 +823,7 @@ int libmedia_dequeue_buffer_mp(int handle, media_buffer_t* buffer)
     buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
     buf.memory = V4L2_MEMORY_MMAP;
     buf.m.planes = planes;
-    buf.length = VIDEO_MAX_PLANES;
+    buf.length = dev->format.num_planes;  // 使用格式中的平面数量
     
     if (xioctl(dev->fd, VIDIOC_DQBUF, &buf) == -1) {
         if (errno == EAGAIN) {
@@ -769,6 +845,13 @@ int libmedia_dequeue_buffer_mp(int handle, media_buffer_t* buffer)
     buffer->bytes_used = buf.m.planes[0].bytesused;
     buffer->timestamp = (uint64_t)buf.timestamp.tv_sec * 1000000000ULL + 
                        (uint64_t)buf.timestamp.tv_usec * 1000ULL;
+    
+    // 标记缓冲区为未队列状态
+    if (dev->buffer_queued) {
+        dev->buffer_queued[buf.index] = false;
+    }
+    
+    MEDIA_DEBUG(DEBUG_INFO, "Dequeued buffer %d successfully", buf.index);
     
     return 0;
 }
@@ -976,6 +1059,8 @@ int libmedia_release_frame(int handle, media_frame_t* frame)
         set_last_error(MEDIA_ERROR_INVALID_PARAM);
         return -1;
     }
+    
+    MEDIA_DEBUG(DEBUG_INFO, "Releasing frame with buffer index %d", frame->frame_id);
     
     // Queue buffer back for reuse
     if (dev->use_multiplanar) {
