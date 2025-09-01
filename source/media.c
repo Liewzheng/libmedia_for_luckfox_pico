@@ -1253,6 +1253,16 @@ void libmedia_destroy_session(media_session_t* session)
     MEDIA_DEBUG(DEBUG_INFO, "Session destroyed");
 }
 
+int libmedia_session_get_device_handle(media_session_t* session)
+{
+    if (!session || !session->device) {
+        set_last_error(MEDIA_ERROR_INVALID_PARAM);
+        return -1;
+    }
+    
+    return session->device - g_devices;
+}
+
 // ============================================================================
 // Camera Control Interface Implementation
 // ============================================================================
@@ -1486,6 +1496,65 @@ int libmedia_set_vertical_blanking(int subdev_handle, int32_t blanking)
 int libmedia_set_test_pattern(int subdev_handle, int32_t pattern)
 {
     return libmedia_set_control(subdev_handle, MEDIA_CTRL_TEST_PATTERN, pattern);
+}
+
+// ============================================================================
+// Crop Selection Functions
+// ============================================================================
+
+int libmedia_set_crop_selection(int handle, int top, int left, int width, int height)
+{
+    device_context_t* dev = find_device(handle);
+    if (!dev) {
+        set_last_error(MEDIA_ERROR_INVALID_PARAM);
+        return -1;
+    }
+    
+    struct v4l2_selection sel = {0};
+    sel.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    sel.target = V4L2_SEL_TGT_CROP;
+    sel.r.top = top;
+    sel.r.left = left;
+    sel.r.width = width;
+    sel.r.height = height;
+    
+    if (xioctl(dev->fd, VIDIOC_S_SELECTION, &sel) == -1) {
+        MEDIA_DEBUG(DEBUG_ERROR, "VIDIOC_S_SELECTION (crop) failed: %s", strerror(errno));
+        set_last_error(MEDIA_ERROR_IOCTL_FAILED);
+        return -1;
+    }
+    
+    MEDIA_DEBUG(DEBUG_INFO, "Set crop selection: top=%d, left=%d, width=%d, height=%d", 
+                top, left, width, height);
+    return 0;
+}
+
+int libmedia_get_crop_selection(int handle, int* top, int* left, int* width, int* height)
+{
+    device_context_t* dev = find_device(handle);
+    if (!dev || !top || !left || !width || !height) {
+        set_last_error(MEDIA_ERROR_INVALID_PARAM);
+        return -1;
+    }
+    
+    struct v4l2_selection sel = {0};
+    sel.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    sel.target = V4L2_SEL_TGT_CROP;
+    
+    if (xioctl(dev->fd, VIDIOC_G_SELECTION, &sel) == -1) {
+        MEDIA_DEBUG(DEBUG_ERROR, "VIDIOC_G_SELECTION (crop) failed: %s", strerror(errno));
+        set_last_error(MEDIA_ERROR_IOCTL_FAILED);
+        return -1;
+    }
+    
+    *top = sel.r.top;
+    *left = sel.r.left;
+    *width = sel.r.width;
+    *height = sel.r.height;
+    
+    MEDIA_DEBUG(DEBUG_INFO, "Get crop selection: top=%d, left=%d, width=%d, height=%d", 
+                *top, *left, *width, *height);
+    return 0;
 }
 
 // ============================================================================

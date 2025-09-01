@@ -366,6 +366,13 @@ int libmedia_session_release_frame(media_session_t* session, media_frame_t* fram
  */
 void libmedia_destroy_session(media_session_t* session);
 
+/**
+ * @brief Get device handle from session
+ * @param session Session handle
+ * @return Device handle on success, negative on error
+ */
+int libmedia_session_get_device_handle(media_session_t* session);
+
 // ============================================================================
 // Utility Functions
 // ============================================================================
@@ -649,6 +656,28 @@ int libmedia_set_vertical_blanking(int subdev_handle, int32_t blanking);
  * @return 0 on success, negative on error
  */
 int libmedia_set_test_pattern(int subdev_handle, int32_t pattern);
+
+/**
+ * @brief Set crop selection
+ * @param handle Device handle (not sub-device)
+ * @param top Top offset for crop
+ * @param left Left offset for crop
+ * @param width Crop width
+ * @param height Crop height
+ * @return 0 on success, negative on error
+ */
+int libmedia_set_crop_selection(int handle, int top, int left, int width, int height);
+
+/**
+ * @brief Get crop selection
+ * @param handle Device handle (not sub-device)
+ * @param top Output top offset
+ * @param left Output left offset
+ * @param width Output crop width
+ * @param height Output crop height
+ * @return 0 on success, negative on error
+ */
+int libmedia_get_crop_selection(int handle, int* top, int* left, int* width, int* height);
 
 #ifdef __cplusplus
 }
